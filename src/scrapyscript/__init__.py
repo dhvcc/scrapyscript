@@ -8,6 +8,7 @@ spiders are returned as a list.
 import collections
 import inspect
 import io
+import logging
 from billiard import Process  # fork of multiprocessing that works with celery
 from billiard.queues import Queue
 from pydispatch import dispatcher
@@ -15,6 +16,15 @@ from scrapy import signals
 from scrapy.crawler import CrawlerProcess
 from scrapy.settings import Settings
 from scrapy.spiders import Spider
+
+logger = logging.getLogger("scrapyscript")
+
+
+def err(failure):
+    f = io.StringIO()
+    failure.printTraceback(file=f)
+
+    logger.error(f.getvalue())
 
 
 class ScrapyScriptException(Exception):
@@ -61,9 +71,11 @@ class Processor(Process):
         self.results.append(item)
 
     def _item_error(self, failure):
+        err(failure)
         self.errors.append((failure.type, failure.value))
 
     def _spider_error(self, failure):
+        err(failure)
         self.errors.append((failure.type, failure.value))
 
     def _crawl(self, requests):
