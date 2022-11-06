@@ -7,9 +7,9 @@ spiders are returned as a list.
 
 import collections
 import inspect
+import io
 from billiard import Process  # fork of multiprocessing that works with celery
 from billiard.queues import Queue
-
 from pydispatch import dispatcher
 from scrapy import signals
 from scrapy.crawler import CrawlerProcess
@@ -48,13 +48,23 @@ class Processor(Process):
         """
         kwargs = {"ctx": __import__("billiard.synchronize")}
 
-        self.results = Queue(**kwargs)
-        self.items = []
+        self.result_queue = Queue(**kwargs)
+        self.error_queue = Queue(**kwargs)
+        self.results = []
+        self.errors = []
         self.settings = settings or Settings()
         dispatcher.connect(self._item_scraped, signals.item_scraped)
+        dispatcher.connect(self._item_error, signals.item_error)
+        dispatcher.connect(self._spider_error, signals.spider_error)
 
     def _item_scraped(self, item):
-        self.items.append(item)
+        self.results.append(item)
+
+    def _item_error(self, failure):
+        self.errors.append((failure.type, failure.value))
+
+    def _spider_error(self, failure):
+        self.errors.append((failure.type, failure.value))
 
     def _crawl(self, requests):
         """
@@ -70,7 +80,8 @@ class Processor(Process):
 
         self.crawler.start()
         self.crawler.stop()
-        self.results.put(self.items)
+        self.result_queue.put(self.results)
+        self.error_queue.put(self.errors)
 
     def run(self, jobs):
         """Start the Scrapy engine, and execute all jobs.  Return consolidated results
@@ -88,11 +99,13 @@ class Processor(Process):
 
         p = Process(target=self._crawl, args=[jobs])
         p.start()
-        results = self.results.get()
+        self.results = self.result_queue.get()
+        self.errors = self.error_queue.get()
+        p.join()
         p.join()
         p.terminate()
 
-        return results
+        return self.results
 
     def validate(self, jobs):
         if not all([isinstance(x, Job) for x in jobs]):
